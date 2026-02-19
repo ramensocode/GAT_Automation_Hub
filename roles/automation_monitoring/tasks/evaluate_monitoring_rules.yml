@@ -1,0 +1,114 @@
+---
+# ============================================================================
+# MONITORING RULES EVALUATION
+# ============================================================================
+# Evaluates monitoring rules and triggers alerts based on patterns
+# ============================================================================
+
+- name: "Evaluate Rule: Consecutive Failures"
+  block:
+    - name: "Check for consecutive failures per automation"
+      set_fact:
+        consecutive_failure_alerts: "{{ consecutive_failure_alerts | default([]) + [item] }}"
+      loop: "{{ health_report }}"
+      when: 
+        - monitoring_cfg.monitoring_rules is defined
+        - monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'consecutive_failures') | list | length > 0
+        - monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'consecutive_failures') | list | first | json_query('enabled')
+        - item.failed_runs | int >= (monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'consecutive_failures') | list | first).parameters.consecutive_count
+    
+    - name: "Add consecutive failure alerts"
+      set_fact:
+        alerts_triggered: "{{ alerts_triggered + consecutive_failure_alerts | default([]) }}"
+      when: consecutive_failure_alerts is defined
+  when: monitoring_cfg.monitoring_rules is defined
+
+- name: "Evaluate Rule: Missing Scheduled Runs"
+  block:
+    - name: "Check for missing runs"
+      set_fact:
+        missing_run_alerts: "{{ missing_run_alerts | default([]) + [missing_alert] }}"
+      loop: "{{ health_report }}"
+      when: 
+        - monitoring_cfg.monitoring_rules is defined
+        - monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'missing_scheduled_run') | list | length > 0
+        - monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'missing_scheduled_run') | list | first | json_query('enabled')
+        - item.missing_run_alert
+      vars:
+        grace_period_minutes: >-
+          {% if missing_runs_hours is defined and missing_runs_hours is not none %}
+            {{ missing_runs_hours * 60 }}
+          {% else %}
+            {% set rule = monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'missing_scheduled_run') | list | first %}
+            {% if rule.parameters.grace_period_minutes is defined %}
+              {{ rule.parameters.grace_period_minutes }}
+            {% elif monitoring_cfg.monitoring_config.default_thresholds.missing_runs_hours is defined %}
+              {{ monitoring_cfg.monitoring_config.default_thresholds.missing_runs_hours * 60 }}
+            {% else %}
+              {{ 1440 }}
+            {% endif %}
+          {% endif %}
+        missing_alert:
+          severity: "WARNING"
+          automation: "{{ item.automation_name }}"
+          message: "{{ item.display_name }}: No run detected for {{ item.time_since_last_run }} (grace period: {{ grace_period_minutes }} minutes)"
+          owner: "{{ item.owner }}"
+    
+    - name: "Add missing run alerts"
+      set_fact:
+        alerts_triggered: "{{ alerts_triggered + missing_run_alerts | default([]) }}"
+      when: missing_run_alerts is defined
+
+# Rule 6: Minimum Run Frequency - Alert when automation runs less frequently than expected
+- name: "Evaluate Rule: Minimum Run Frequency"
+  block:
+    - name: "Check for insufficient run frequency"
+      set_fact:
+        frequency_alerts: "{{ frequency_alerts | default([]) + [freq_alert] }}"
+      loop: "{{ health_report }}"
+      when:
+        - monitoring_cfg.monitoring_rules is defined
+        - monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'minimum_run_frequency') | list | length > 0
+        - monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'minimum_run_frequency') | list | first | json_query('enabled')
+        - item.min_frequency_alert
+      vars:
+        freq_alert:
+          severity: "CRITICAL"
+          automation: "{{ item.automation_name }}"
+          message: "{{ item.display_name }}: Low run frequency - Expected {{ item.min_runs_expected }} runs in last {{ item.min_runs_lookback_hours }}h, found {{ item.total_runs }}"
+          owner: "{{ item.owner }}"
+    
+    - name: "Add frequency alerts"
+      set_fact:
+        alerts_triggered: "{{ alerts_triggered + frequency_alerts | default([]) }}"
+      when: frequency_alerts is defined
+  when: monitoring_cfg.monitoring_rules is defined
+
+- name: "Basic Health Status Alerts (Database-Driven Config)"
+  block:
+    - name: "Check for critical health status"
+      set_fact:
+        basic_alerts: "{{ basic_alerts | default([]) + [basic_alert] }}"
+      loop: "{{ health_report }}"
+      when: 
+        - item.health_status in ['CRITICAL', 'WARNING']
+      vars:
+        basic_alert:
+          severity: "{{ item.health_status }}"
+          automation: "{{ item.automation_name }}"
+          message: "{{ item.display_name }}: {{ item.health_status }} - Failure Rate: {{ item.failure_rate }}%"
+          owner: "{{ item.owner }}"
+    
+    - name: "Add basic health alerts"
+      set_fact:
+        alerts_triggered: "{{ alerts_triggered + basic_alerts | default([]) }}"
+      when: basic_alerts is defined
+  when: monitoring_cfg.monitoring_rules is not defined
+
+- name: "Display Rule Evaluation Summary"
+  debug:
+    msg:
+      - "========== MONITORING RULES EVALUATED =========="
+      - "Total Alerts: {{ alerts_triggered | length }}"
+      - "Critical: {{ alerts_triggered | selectattr('severity', 'equalto', 'CRITICAL') | list | length }}"
+      - "Warning: {{ alerts_triggered | selectattr('severity', 'equalto', 'WARNING') | list | length }}"

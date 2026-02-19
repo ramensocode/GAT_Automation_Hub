@@ -1,0 +1,38 @@
+---
+# ========================================================================
+# JIRA TICKET HANDLER
+# ========================================================================
+# Creates Jira issue when automation fails
+# Requires: jira_config and context variables
+# ========================================================================
+
+- name: "Debug Jira ticket creation"
+  debug:
+    msg:
+      - "=========================================="
+      - "Jira Ticket Creation"
+      - "=========================================="
+      - "Automation: {{ context.automation_name }}"
+      - "Display Name: {{ context.display_name }}"
+      - "Status: {{ context.status }}"
+      - "Error: {{ context.error_message }}"
+      - "Jira Config: {{ jira_config }}"
+      - "=========================================="
+      - "NOTE: Jira ticket creation logic to be implemented"
+      - "This requires Jira API credentials and endpoint configuration"
+  ignore_errors: true
+
+# TODO: Implement Jira REST API integration
+# Example integration points:
+# - Use jira_config to determine Jira instance and project
+# - POST to /rest/api/2/issue
+# - Create issue with type=Bug or Task
+# - Include automation details in description
+# - Set priority based on severity
+# - Assign to appropriate team/user
+# - Add labels for automation category
+
+- name: "Placeholder - Jira ticket not created"
+  debug:
+    msg: "⚠️ Jira ticket handler not yet implemented. Configure Jira API integration."
+  ignore_errors: true

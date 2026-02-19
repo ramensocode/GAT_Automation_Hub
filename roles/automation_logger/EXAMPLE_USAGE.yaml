@@ -1,0 +1,204 @@
+---
+# ========================================================================
+# EXAMPLE: Using the automation_logger Role
+# ========================================================================
+# This shows how to replace the existing logging code in 
+# playbook_CreateSNOWTickets_ErrorHandling.yaml with the reusable role
+# 
+# FEATURES DEMONSTRATED:
+# - Auto-detection of job_id (AAP/Tower/CLI)
+# - CI (Configuration Item) tracking
+# - AI usage tracking
+# - Automatic execution environment detection
+# - IST timestamp generation (UTC+5:30 standard)
+# - Environment-aware Snowflake schema toggling (prod/dev)
+# ========================================================================
+
+- name: "Create ServiceNow Tickets - Using Reusable Logger Role"
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    # Automation tracking variables
+    automation_name: "CVE_Ticket_Creation_Automation"
+    automation_start_time: ""  # Will be set using IST timestamp generator
+    return_code: "ARC_0000"  # Default success
+    tickets_created_count: 0
+    tickets_skipped_count: 0
+    
+    # Configuration Item (CI) - what system is being managed
+    ci_name: "Security_Vulnerability_Management"
+    
+    # Snowflake connection parameters
+    # Environment: prod, dev (controls Snowflake schema)
+    snowflake_environment: "dev"  # Default to dev; override with -e snowflake_environment=prod
+    snowflake_schema_map:
+      prod: "GAT"
+      dev: "GAT_DEV"
+    snowflake_account: 'nc51688.us-east-2.aws'
+    snowflake_user: 'gat'
+    snowflake_password: 'Cde@123qaZ@2022'
+    snowflake_warehouse: "GAT_WH"
+    snowflake_database: "DEPT_ANALYTICS"
+    snowflake_schema: "{{ snowflake_schema_map[snowflake_environment] }}"
+    snowflake_role: "GAT_APP"
+    
+    # ServiceNow connection
+    user: "web.ansible.user"
+    snow_host: "https://envisiontest.service-now.com"
+    password: 'VTupbV8$4LyE'
+
+  tasks:
+    # ===== CAPTURE START TIME IN IST =====
+    - name: "Capture Automation Start Time (IST)"
+      shell: |
+        python3 << 'PYTHON_EOF'
+        from datetime import datetime, timezone, timedelta
+        IST = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(IST)
+        formatted = now_ist.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        print(formatted)
+        PYTHON_EOF
+      register: start_timestamp
+      tags: always
+
+    - name: "Set Automation Start Time"
+      set_fact:
+        automation_start_time: "{{ start_timestamp.stdout }}"
+      tags: always
+
+    - name: "Display Start Time"
+      debug:
+        msg:
+          - "Automation Started at: {{ automation_start_time }}"
+          - "Timezone: IST (UTC+5:30) - Controlled"
+
+    - name: "Main Automation Flow with Error Handling"
+      block:
+        # ===== YOUR AUTOMATION TASKS =====
+        - name: "Load Data"
+          set_fact:
+            ai_vulnerabilities: "{{ lookup('file', '/home/hponnu/ansibleeda/EDA_Code/ai_structured_data.json') | from_json }}"
+        
+        - name: "Process Data"
+          debug:
+            msg: "Processing {{ ai_vulnerabilities | length }} vulnerabilities"
+        
+        # If error occurs, set return_code
+        - name: "Handle potential error"
+          set_fact:
+            return_code: "ARC_3000"  # Example error code
+          when: false  # This is just an example
+        
+        # Update your counters throughout automation
+        - name: "Track metrics"
+          set_fact:
+            tickets_created_count: 5
+            tickets_skipped_count: 2
+      
+      rescue:
+        - name: "Handle errors"
+          set_fact:
+            return_code: "{{ return_code | default('ARC_5000') }}"
+      
+      always:
+        # ========================================================================
+        # REPLACE ALL THE LOGGING CODE WITH THIS SINGLE ROLE INCLUDE
+        # ========================================================================
+        # The role will automatically:
+        # - Detect if running in AAP, Tower, or CLI
+        # - Generate appropriate job_id (AAP_123, TOWER_456, or CLI_<timestamp>)
+        # - Query RETURN_CODES table
+        # - Write to AUTOMATION_LOGS with all details
+        # ========================================================================
+        - name: "Log automation execution to Snowflake"
+          include_role:
+            name: automation_logger
+          vars:
+            # Pass automation-specific context
+            additional_context: "Created: {{ tickets_created_count }}, Skipped: {{ tickets_skipped_count }}"
+            # ci_name inherited from playbook vars
+        
+        # OPTIONAL: Add your automation-specific summary display
+        - name: "Display automation summary (automation-specific)"
+          debug:
+            msg:
+              - "=========================================="
+              - "  CVE TICKET AUTOMATION COMPLETE"
+              - "=========================================="
+              - "Status: {{ 'SUCCESS' if return_code == 'ARC_0000' else 'FAILED' }}"
+              - "Return Code: {{ return_code }}"
+              - "---"
+              - "Tickets Created: {{ tickets_created_count }}"
+              - "Tickets Skipped: {{ tickets_skipped_count }}"
+              - "=========================================="
+
+# ========================================================================
+# MIGRATION GUIDE:
+# ========================================================================
+# To migrate your existing playbook:
+#
+# 1. REMOVE these variables from your playbook:
+#    - job_id: "{{ ansible_date_time.epoch }}"  # NOW AUTO-DETECTED!
+#
+# 2. OPTIONALLY ADD CI variable:
+#    - ci_name: "Your_System_Name"
+#
+# 3. In the 'always' section, REPLACE these tasks:
+#    - "Query RETURN_CODES table for error details"
+#    - "Extract error details from RETURN_CODES query result" 
+#    - "Write final automation log to AUTOMATION_LOGS (Single Record)"
+#
+# 4. With this single task:
+#    - include_role:
+#        name: automation_logger
+#      vars:
+#        additional_context: "Created: {{ tickets_created_count }}, Skipped: {{ tickets_skipped_count }}"
+#
+# 5. Keep your automation-specific display/summary tasks if desired
+#
+# Benefits:
+# - Reduces 120+ lines to 4 lines
+# - Automatic job_id detection for AAP/Tower/CLI
+# - Standardizes logging across all automations
+# - CI tracking for CMDB integration
+# - Easier to maintain and update logging logic centrally
+# - Consistent error handling
+# ========================================================================
+
+# ========================================================================
+# EXECUTION ENVIRONMENT DETECTION:
+# ========================================================================
+# The role automatically detects where it's running:
+#
+# When running in AAP (Ansible Automation Platform):
+#   - Looks for AWX_JOB_ID environment variable
+#   - Creates job_id like: AAP_12345
+#   - Sets execution_environment: AAP
+#
+# When running in Ansible Tower:
+#   - Looks for TOWER_JOB_ID environment variable
+#   - Creates job_id like: TOWER_67890
+#   - Sets execution_environment: Tower
+#
+# When running from CLI:
+#   - Uses ansible_date_time.epoch
+#   - Creates job_id like: CLI_1707654321
+#
+# ========================================================================
+# ENVIRONMENT TOGGLING:
+# ========================================================================
+# Run in development environment (default):
+#   ansible-playbook EXAMPLE_USAGE.yaml
+#
+# Run in production environment:
+#   ansible-playbook EXAMPLE_USAGE.yaml -e snowflake_environment=prod
+#
+# This automatically switches the Snowflake schema from GAT_DEV to GAT
+# ========================================================================
+#   - Sets execution_environment: CLI
+#
+# To force a specific job_id (bypass auto-detection):
+#   job_id: "CUSTOM_12345"
+# ========================================================================

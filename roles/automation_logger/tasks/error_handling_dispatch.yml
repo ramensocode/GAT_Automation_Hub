@@ -1,0 +1,142 @@
+---
+# ========================================================================
+# ERROR HANDLING DISPATCHER
+# ========================================================================
+# Dispatches error notifications based on ERROR_HANDLING_MATRIX
+# Called when automation fails and ERROR_HANDLING_ENABLED = true
+# ========================================================================
+
+- name: "Extract error handling configuration"
+  set_fact:
+    error_config: "{{ error_handling_config.rows[0] }}"
+    error_matrix_raw: "{{ error_handling_config.rows[0].ERROR_HANDLING_MATRIX }}"
+    approved_handlers_raw: "{{ error_handling_config.rows[0].APPROVED_ERROR_HANDLERS }}"
+  ignore_errors: true
+
+- name: "Parse ERROR_HANDLING_MATRIX from JSON string"
+  set_fact:
+    error_matrix: "{{ error_matrix_raw | from_json }}"
+    approved_handlers: "{{ approved_handlers_raw | from_json }}"
+  when:
+    - error_matrix_raw is defined
+    - error_matrix_raw is not none
+    - error_matrix_raw | length > 0
+    - approved_handlers_raw is defined
+    - approved_handlers_raw is not none
+    - approved_handlers_raw | length > 0
+  ignore_errors: true
+
+- name: "Debug error handling configuration"
+  debug:
+    msg:
+      - "=========================================="
+      - "ERROR HANDLING CONFIGURATION"
+      - "=========================================="
+      - "Automation: {{ final_automation_name }}"
+      - "Display Name: {{ error_config.DISPLAY_NAME | default('N/A') }}"
+      - "Status: {{ 'FAILED' if return_code != 'ARC_0000' and return_code != 'ARC_0002' else 'PARTIAL' }}"
+      - "Return Code: {{ return_code }}"
+      - "Error Type: {{ error_type }}"
+      - "Error Message: {{ final_error_message }}"
+      - "Approved Handlers: {{ approved_handlers | default('None') }}"
+      - "Error Matrix: {{ error_matrix | default('None') }}"
+      - "=========================================="
+  when: ansible_verbosity >= 1
+  ignore_errors: true
+
+- name: "Prepare notification context"
+  set_fact:
+    notification_context:
+      automation_name: "{{ final_automation_name }}"
+      display_name: "{{ error_config.DISPLAY_NAME }}"
+      owner_name: "{{ error_config.OWNER_NAME }}"
+      owner_email: "{{ error_config.OWNER_EMAIL }}"
+      job_id: "{{ detected_job_id | trim }}"
+      status: "{{ 'FAILED' if return_code != 'ARC_0000' and return_code != 'ARC_0001' else 'PARTIAL' }}"
+      return_code: "{{ return_code }}"
+      error_type: "{{ error_type }}"
+      error_message: "{{ final_error_message }}"
+      severity: "{{ return_code_severity | default('high') }}"
+      resolution_hint: "{{ resolution_hint | default('Check logs') }}"
+      started_at: "{{ automation_start_time }}"
+      completed_at: "{{ automation_completed_time }}"
+  ignore_errors: true
+
+# ========================================================================
+# DISPATCH NOTIFICATIONS TO APPROVED HANDLERS
+# ========================================================================
+
+- name: "Send Email Notification"
+  include_tasks: notify_email.yml
+  vars:
+    email_recipient: "{{ error_matrix[0].email }}"
+    context: "{{ notification_context }}"
+  when:
+    - approved_handlers is defined
+    - approved_handlers is not none
+    - "'email' in approved_handlers"
+    - error_matrix is defined
+    - error_matrix is not none
+    - error_matrix | length > 0
+    - error_matrix[0].email is defined
+    - error_matrix[0].email is not none
+    - error_matrix[0].email | length > 0
+  ignore_errors: true
+
+- name: "Send Teams Notification"
+  include_tasks: notify_teams.yml
+  vars:
+    teams_webhook: "{{ error_matrix[0].teams_notifications }}"
+    context: "{{ notification_context }}"
+  when:
+    - approved_handlers is defined
+    - approved_handlers is not none
+    - "'teams_notification' in approved_handlers or 'teams_notifications' in approved_handlers"
+    - error_matrix is defined
+    - error_matrix is not none
+    - error_matrix | length > 0
+    - error_matrix[0].teams_notifications is defined
+    - error_matrix[0].teams_notifications is not none
+    - error_matrix[0].teams_notifications | length > 0
+  ignore_errors: true
+
+- name: "Create ServiceNow Ticket"
+  include_tasks: notify_snow_ticket.yml
+  vars:
+    snow_config: "{{ error_matrix[0].SNOW_Ticket }}"
+    context: "{{ notification_context }}"
+  when:
+    - approved_handlers is defined
+    - approved_handlers is not none
+    - "'SNOW_Ticket' in approved_handlers"
+    - error_matrix is defined
+    - error_matrix is not none
+    - error_matrix | length > 0
+    - error_matrix[0].SNOW_Ticket is defined
+  ignore_errors: true
+
+- name: "Create Jira Ticket"
+  include_tasks: notify_jira_ticket.yml
+  vars:
+    jira_config: "{{ error_matrix[0].jira_Ticket }}"
+    context: "{{ notification_context }}"
+  when:
+    - approved_handlers is defined
+    - approved_handlers is not none
+    - "'jira_Ticket' in approved_handlers"
+    - error_matrix is defined
+    - error_matrix is not none
+    - error_matrix | length > 0
+    - error_matrix[0].jira_Ticket is defined
+  ignore_errors: true
+
+- name: "Display error handling summary"
+  debug:
+    msg:
+      - "=========================================="
+      - "ERROR HANDLING COMPLETED"
+      - "=========================================="
+      - "Automation: {{ final_automation_name }}"
+      - "Handlers Executed: {{ approved_handlers | default([]) | join(', ') }}"
+      - "=========================================="
+  ignore_errors: true

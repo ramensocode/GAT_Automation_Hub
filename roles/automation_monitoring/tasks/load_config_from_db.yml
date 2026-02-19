@@ -1,0 +1,220 @@
+---
+# ============================================================================
+# DATABASE-DRIVEN CONFIGURATION LOADER
+# ============================================================================
+# Loads automation monitoring configuration from AUTOMATION_REGISTRY table
+# Falls back to YAML config if database is unavailable
+# ============================================================================
+
+- name: "Query Automation Registry from Snowflake"
+  block:
+    - name: "Fetch Automation Configuration from AUTOMATION_REGISTRY"
+      community.snowflake.snowflake_query:
+        snowflake_account: "{{ snowflake_account }}"
+        snowflake_user: "{{ snowflake_user }}"
+        snowflake_password: "{{ snowflake_password }}"
+        snowflake_database: "{{ snowflake_database }}"
+        snowflake_warehouse: "{{ snowflake_warehouse }}"
+        snowflake_schema: "{{ snowflake_schema }}"
+        query: >-
+          SELECT 
+          AUTOMATION_NAME,
+          DISPLAY_NAME,
+          DESCRIPTION,
+          CATEGORY,
+          SUBCATEGORY,
+          TAGS,
+          CRITICALITY,
+          COMPLEXITY_LEVEL,
+          OWNER_NAME,
+          OWNER_EMAIL,
+          OWNER_TEAM,
+          BACKUP_OWNER_EMAIL,
+          TRIGGER_TYPE,
+          SCHEDULE_CRON,
+          FREQUENCY,
+          TIMEOUT_SECONDS,
+          MAX_RETRIES,
+          EXPECTED_RUNTIME_SEC,
+          MONITORING_ENABLED,
+          LONG_RUNNING_THRESHOLD_SEC,
+          NOTIFICATION_CHANNELS,
+          ERROR_HANDLING_ENABLED,
+          HEALTH_CHECK_ENABLED,
+          HEALTH_CHECK_INTERVAL,
+          MONITORING_ALERTS_ENABLED,
+          HEALTH_CHECK_ALERTS_ENABLED,
+          STATUS,
+          IS_LIVE
+          FROM AUTOMATION_REGISTRY
+          WHERE MONITORING_ENABLED = TRUE
+          AND IS_LIVE = TRUE
+          {{ "AND AUTOMATION_NAME = '" + automation_name + "'" if automation_name != 'all' else '' }}
+          ORDER BY CRITICALITY DESC, AUTOMATION_NAME
+        output_format: json
+      register: registry_query_result
+    
+    - name: "Parse Registry Data"
+      set_fact:
+        registry_automations_raw: "{{ registry_query_result.rows | default([]) }}"
+    
+    - name: "Transform Registry Data to Monitoring Config Format"
+      set_fact:
+        db_automations: "{{ db_automations | default([]) + [transformed_automation] }}"
+      loop: "{{ registry_automations_raw }}"
+      loop_control:
+        loop_var: reg_auto
+        label: "{{ reg_auto.AUTOMATION_NAME }}"
+      vars:
+        transformed_automation:
+          name: "{{ reg_auto.AUTOMATION_NAME }}"
+          display_name: "{{ reg_auto.DISPLAY_NAME | default(reg_auto.AUTOMATION_NAME) }}"
+          description: "{{ reg_auto.DESCRIPTION | default('') }}"
+          category: "{{ reg_auto.CATEGORY | default('general') }}"
+          subcategory: "{{ reg_auto.SUBCATEGORY | default('') }}"
+          tags: "{{ reg_auto.TAGS | default([]) }}"
+          # Map schedule types
+          schedule: "{{ 'event_driven' if reg_auto.TRIGGER_TYPE in ['event', 'webhook'] else 
+                        'hourly' if reg_auto.FREQUENCY == 'hourly' else
+                        'daily' if reg_auto.FREQUENCY == 'daily' else
+                        'weekly' if reg_auto.FREQUENCY == 'weekly' else
+                        'scheduled' }}"
+          expected_frequency: "{{ reg_auto.FREQUENCY | default('on_demand') }}"
+          schedule_cron: "{{ reg_auto.SCHEDULE_CRON | default('') }}"
+          # Owner information
+          owner: "{{ reg_auto.OWNER_TEAM | default(reg_auto.OWNER_NAME) }}"
+          contact: "{{ reg_auto.OWNER_EMAIL }}"
+          backup_contact: "{{ reg_auto.BACKUP_OWNER_EMAIL | default('') }}"
+          # Criticality mapping
+          critical: "{{ true if reg_auto.CRITICALITY in ['critical', 'high'] else false }}"
+          criticality_level: "{{ reg_auto.CRITICALITY | default('medium') }}"
+          complexity_level: "{{ reg_auto.COMPLEXITY_LEVEL | default('low') }}"
+          # Thresholds derived from registry fields
+          thresholds:
+            failure_rate_warning: "{{ 5 if reg_auto.CRITICALITY == 'critical' else 
+                                      10 if reg_auto.CRITICALITY == 'high' else 
+                                      15 if reg_auto.CRITICALITY == 'medium' else 20 }}"
+            failure_rate_critical: "{{ 10 if reg_auto.CRITICALITY == 'critical' else 
+                                       20 if reg_auto.CRITICALITY == 'high' else 
+                                       30 if reg_auto.CRITICALITY == 'medium' else 40 }}"
+            missing_runs_hours: "{{ 2 if reg_auto.FREQUENCY == 'hourly' else
+                                    26 if reg_auto.FREQUENCY == 'daily' else
+                                    168 if reg_auto.FREQUENCY == 'weekly' else 48 }}"
+            max_execution_minutes: "{{ ((reg_auto.TIMEOUT_SECONDS | default(3600)) / 60) | int }}"
+            long_running_multiplier: "{{ 2 if reg_auto.MONITORING_ALERTS_ENABLED else 5 }}"
+            expected_runtime_sec: "{{ reg_auto.EXPECTED_RUNTIME_SEC | default(300) }}"
+          # Retry and timeout settings
+          max_retries: "{{ reg_auto.MAX_RETRIES | default(3) }}"
+          timeout_seconds: "{{ reg_auto.TIMEOUT_SECONDS | default(3600) }}"
+          # Alert configuration from registry
+          alerts:
+            enabled: "{{ reg_auto.MONITORING_ALERTS_ENABLED | default(true) }}"
+            alert_on_failure: "{{ reg_auto.MONITORING_ALERTS_ENABLED | default(true) }}"
+            alert_on_success: false
+            alert_on_long_running: "{{ reg_auto.MONITORING_ALERTS_ENABLED | default(true) }}"
+            notification_channels: "{{ reg_auto.NOTIFICATION_CHANNELS | default([reg_auto.OWNER_EMAIL]) }}"
+            notify_on: "{{ ['failure', 'missing_run'] if reg_auto.MONITORING_ALERTS_ENABLED else [] }}"
+          # Health checks
+          health_checks:
+            - check_last_run: "{{ reg_auto.HEALTH_CHECK_ENABLED | default(true) }}"
+            - check_failure_rate: true
+            - check_execution_time: "{{ reg_auto.MONITORING_ALERTS_ENABLED | default(true) }}"
+          # Error handling
+          error_handling_enabled: "{{ reg_auto.ERROR_HANDLING_ENABLED | default(true) }}"
+          # Metadata
+          status: "{{ reg_auto.STATUS }}"
+          is_live: "{{ reg_auto.IS_LIVE }}"
+    
+    - name: "Set Database-Driven Config"
+      set_fact:
+        db_driven_config:
+          automations: "{{ db_automations | default([]) }}"
+          config_source: "database"
+          config_loaded_at: "{{ ansible_date_time.iso8601 }}"
+          total_automations: "{{ db_automations | default([]) | length }}"
+    
+    - name: "Display Database Config Summary"
+      debug:
+        msg:
+          - "✓ Configuration loaded from AUTOMATION_REGISTRY"
+          - "  Total automations: {{ db_automations | default([]) | length }}"
+          - "  Config source: Snowflake Database"
+          - "  Loaded at: {{ ansible_date_time.iso8601 }}"
+  
+  rescue:
+    - name: "Database Config Load Failed"
+      debug:
+        msg:
+          - "⚠ Failed to load config from database"
+          - "  Error: {{ ansible_failed_result.msg | default('Unknown error') }}"
+          - "  Falling back to YAML configuration..."
+    
+    - name: "Load Fallback YAML Configuration"
+      include_vars:
+        file: ../config/monitoring_config.yaml
+        name: fallback_cfg
+    
+    - name: "Set Fallback Config"
+      set_fact:
+        db_driven_config:
+          automations: "{{ fallback_cfg.automations | default([]) }}"
+          monitoring_config: "{{ fallback_cfg.monitoring_config }}"
+          config_source: "yaml_fallback"
+          config_loaded_at: "{{ ansible_date_time.iso8601 }}"
+          total_automations: "{{ fallback_cfg.automations | default([]) | length }}"
+    
+    - name: "Display Fallback Config Summary"
+      debug:
+        msg:
+          - "⚠ Using YAML configuration (fallback mode)"
+          - "  Total automations: {{ fallback_cfg.automations | default([]) | length }}"
+          - "  Config source: monitoring_config.yaml"
+    
+    - name: "Check if fallback automations exist"
+      fail:
+        msg: |
+          ⚠ CRITICAL: No automations configured!
+          
+          Database config failed AND YAML fallback has no automations defined.
+          
+          Fix options:
+          1. Uncomment the 'automations' section in monitoring_config.yaml
+          2. Fix database connection and use database-driven config
+          3. Add automations to AUTOMATION_REGISTRY table in Snowflake
+      when: fallback_cfg.automations is not defined or fallback_cfg.automations | length == 0
+
+# ============================================================================
+# MERGE WITH ANY YAML OVERRIDES (Optional)
+# ============================================================================
+- name: "Check for YAML Config Overrides"
+  stat:
+    path: "../config/monitoring_config_overrides.yaml"
+  register: override_file
+
+- name: "Apply YAML Overrides if Present"
+  block:
+    - name: "Load Override Configuration"
+      include_vars:
+        file: ../config/monitoring_config_overrides.yaml
+        name: override_cfg
+    
+    - name: "Merge Overrides with Database Config"
+      set_fact:
+        db_driven_config: "{{ db_driven_config | combine(override_cfg, recursive=True) }}"
+    
+    - name: "Display Override Applied"
+      debug:
+        msg: "✓ YAML overrides applied to database configuration"
+  when: override_file.stat.exists
+
+# ============================================================================
+# FINAL CONFIG ASSIGNMENT
+# ============================================================================
+- name: "Set Final Monitoring Configuration"
+  set_fact:
+    monitoring_cfg: "{{ db_driven_config }}"
+    config_metadata:
+      source: "{{ db_driven_config.config_source }}"
+      loaded_at: "{{ db_driven_config.config_loaded_at }}"
+      automation_count: "{{ db_driven_config.total_automations }}"
+      database_driven: "{{ true if db_driven_config.config_source == 'database' else false }}"

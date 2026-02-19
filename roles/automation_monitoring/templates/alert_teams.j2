@@ -1,0 +1,105 @@
+{
+  "@type": "MessageCard",
+  "@context": "https://schema.org/extensions",
+  "summary": "🚨 Automation Monitoring Alert",
+  "themeColor": "{% if critical_issues > 0 %}D13438{% else %}FFA500{% endif %}",
+  "title": "🚨 Automation Monitoring Alert",
+  "sections": [
+    {
+      "activityTitle": "{{ alerts_triggered | length }} Alert(s) Detected",
+      "activitySubtitle": "{{ ansible_date_time.iso8601 }}",
+      "activityImage": "https://adaptivecards.io/content/cats/1.png",
+      "facts": [
+        {
+          "name": "Monitoring Period:",
+          "value": "Last {{ lookback_hours }} hours"
+        },
+        {
+          "name": "Critical Issues:",
+          "value": "{{ critical_issues }}"
+        },
+        {
+          "name": "Automations Checked:",
+          "value": "{{ automations_checked }}"
+        },
+        {
+          "name": "Total Failures:",
+          "value": "{{ total_failures }}"
+        }
+      ],
+      "markdown": true
+    },
+    {% if critical_issues > 0 %}
+    {
+      "activityTitle": "⚠️ Critical Automations",
+      "text": "{% for auto in health_report | selectattr('health_status', 'equalto', 'CRITICAL') %}**{{ auto.display_name }}** - {{ auto.failure_rate }}% failure rate, Last run: {{ auto.hours_since_last_run }}h ago, Owner: {{ auto.owner }}{% if not loop.last %}\n\n{% endif %}{% endfor %}"
+    },
+    {% endif %}
+    {
+      "activityTitle": "📋 Health Summary",
+      "facts": [
+        {
+          "name": "✅ Healthy:",
+          "value": "{{ health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length }}"
+        },
+        {
+          "name": "⚠️ Warning:",
+          "value": "{{ health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length }}"
+        },
+        {
+          "name": "🚨 Critical:",
+          "value": "{{ critical_issues }}"
+        }
+      ]
+    },
+    {% for alert in alerts_triggered[:5] %}
+    {
+      "activityTitle": "Alert #{{ loop.index }}",
+      "facts": [
+        {
+          "name": "Severity:",
+          "value": "{{ alert.severity }}"
+        },
+        {
+          "name": "Automation:",
+          "value": "{{ alert.automation }}"
+        },
+        {
+          "name": "Message:",
+          "value": "{{ alert.message }}"
+        },
+        {
+          "name": "Owner:",
+          "value": "{{ alert.owner }}"
+        },
+        {
+          "name": "Contact:",
+          "value": "{{ alert.contact | default('N/A') }}"
+        }
+      ]
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ],
+  "potentialAction": [
+    {
+      "@type": "OpenUri",
+      "name": "View Details",
+      "targets": [
+        {
+          "os": "default",
+          "uri": "{{ monitoring_dashboard_url | default('https://monitoring.ensono.com') }}"
+        }
+      ]
+    },
+    {
+      "@type": "OpenUri",
+      "name": "Contact Support",
+      "targets": [
+        {
+          "os": "default",
+          "uri": "mailto:automation-team@ensono.com"
+        }
+      ]
+    }
+  ]
+}

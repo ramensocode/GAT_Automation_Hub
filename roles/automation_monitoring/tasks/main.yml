@@ -1,0 +1,131 @@
+---
+# ============================================================================
+# MAIN TASKS - Automation Monitoring Role
+# ============================================================================
+# Orchestrates the complete monitoring workflow
+# ============================================================================
+
+- name: "Display Monitoring Configuration"
+  debug:
+    msg:
+      - "═══════════════════════════════════════════════════════════════"
+      - "  AUTOMATION MONITORING SYSTEM"
+      - "═══════════════════════════════════════════════════════════════"
+      - "  Configuration Source: {{ 'Database (AUTOMATION_REGISTRY)' if use_db_config else 'YAML File' }}"
+      - "  Target Automation: {{ automation_name }}"
+      - "  Lookback Period: {{ lookback_hours }} hours"
+      - "  Timezone: {{ monitoring_tz }}"
+      - "  Notifications: {{ 'Enabled' if notification_enabled else 'Disabled' }}"
+      - "═══════════════════════════════════════════════════════════════"
+
+# ============================================================================
+# STEP 1: CALCULATE IST CUTOFF TIME
+# ============================================================================
+
+- name: "Calculate IST Cutoff Time"
+  shell: |
+    python3 << 'PYTHON_EOF'
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    
+    # Get current IST time
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    
+    # Calculate lookback cutoff
+    cutoff_ist = now_ist - timedelta(hours={{ lookback_hours }})
+    
+    # Format for Snowflake
+    print(cutoff_ist.strftime('%Y-%m-%d %H:%M:%S'))
+    PYTHON_EOF
+  register: ist_cutoff_result
+  changed_when: false
+
+- name: "Get Current IST Time"
+  shell: |
+    python3 << 'PYTHON_EOF'
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    print(now_ist.strftime('%Y-%m-%d %H:%M:%S IST'))
+    PYTHON_EOF
+  register: current_ist_result
+  changed_when: false
+
+- name: "Set IST Time Variables"
+  set_fact:
+    ist_cutoff: "{{ ist_cutoff_result.stdout }}"
+    current_ist: "{{ current_ist_result.stdout }}"
+
+- name: "Display Time Window"
+  debug:
+    msg:
+      - "Current IST Time: {{ current_ist }}"
+      - "Analyzing From: {{ ist_cutoff }} IST"
+      - "Time Window: {{ lookback_hours }} hours"
+
+# ============================================================================
+# STEP 2: LOAD CONFIGURATION
+# ============================================================================
+
+- name: "Load Configuration (Database or YAML)"
+  include_tasks: load_config_from_db.yml
+  when: use_db_config | bool
+
+- name: "Load Configuration from YAML (Fallback)"
+  include_vars:
+    file: "{{ role_path }}/vars/monitoring_config.yml"
+    name: yaml_config
+  when: not (use_db_config | bool)
+
+- name: "Set Automation List from YAML"
+  set_fact:
+    automation_configs: "{{ yaml_config.automations }}"
+  when: not (use_db_config | bool)
+
+# ============================================================================
+# STEP 3: ANALYZE AUTOMATION HEALTH
+# ============================================================================
+
+- name: "Analyze Automation Health"
+  include_tasks: analyze_automation_health.yml
+
+# ============================================================================
+# STEP 4: EVALUATE MONITORING RULES & ALERTS
+# ============================================================================
+
+- name: "Evaluate Monitoring Rules"
+  include_tasks: evaluate_monitoring_rules.yml
+
+# ============================================================================
+# STEP 5: SEND NOTIFICATIONS
+# ============================================================================
+
+- name: "Send Notifications"
+  include_tasks: send_notifications.yml
+  when: 
+    - notification_enabled | bool
+    - alerts_triggered | length > 0
+
+# ============================================================================
+# STEP 6: GENERATE REPORTS
+# ============================================================================
+
+- name: "Generate HTML Health Report"
+  template:
+    src: health_report.j2
+    dest: "{{ report_output_path }}"
+    mode: '0644'
+  when: generate_html_report | bool
+
+- name: "Display Final Summary"
+  debug:
+    msg:
+      - "═══════════════════════════════════════════════════════════════"
+      - "  MONITORING SUMMARY"
+      - "═══════════════════════════════════════════════════════════════"
+      - "  Automations Checked: {{ automations_checked }}"
+      - "  Total Failures: {{ total_failures }}"
+      - "  Critical Issues: {{ critical_issues }}"
+      - "  Alerts Triggered: {{ alerts_triggered | length }}"
+      - "  Report Generated: {{ report_output_path if generate_html_report else 'Disabled' }}"
+      - "═══════════════════════════════════════════════════════════════"

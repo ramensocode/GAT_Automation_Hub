@@ -1,0 +1,41 @@
+AUTOMATION MONITORING ALERT - {{ ansible_date_time.date }}
+================================================
+
+{{ alerts_triggered | length }} Alert(s) Detected
+
+Time: {{ ansible_date_time.iso8601 }}
+Monitoring Period: Last {{ lookback_hours }} hours
+
+{% if critical_issues > 0 %}
+CRITICAL ISSUES: {{ critical_issues }}
+{% endif %}
+
+ALERTS:
+{% for alert in alerts_triggered %}
+---
+Severity: {{ alert.severity }}
+Automation: {{ alert.automation }}
+Message: {{ alert.message }}
+Owner: {{ alert.owner }}
+Contact: {{ alert.contact | default('N/A') }}
+{% endfor %}
+
+SUMMARY:
+- Total Automations Monitored: {{ automations_checked }}
+- Healthy: {{ health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length }}
+- Warning: {{ health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length }}
+- Critical: {{ critical_issues }}
+
+AUTOMATION HEALTH:
+{% for auto in health_report | sort(attribute='health_status', reverse=true) %}
+{% if auto.health_status != 'HEALTHY' %}
+- {{ auto.display_name }} [{{ auto.health_status }}]
+  Success Rate: {{ auto.success_rate }}% | Failure Rate: {{ auto.failure_rate }}%
+  Last Run: {{ auto.hours_since_last_run }}h ago
+  Owner: {{ auto.owner }}
+{% endif %}
+{% endfor %}
+
+---
+View detailed report: Check monitoring system output
+Contact: automation-team@ensono.com

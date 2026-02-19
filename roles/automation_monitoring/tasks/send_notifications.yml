@@ -1,0 +1,243 @@
+---
+# ============================================================================
+# SEND NOTIFICATIONS AND ALERTS
+# ============================================================================
+# Sends alerts and notifications via Email and Microsoft Teams
+# Based on NOTIFICATION_CHANNELS from AUTOMATION_REGISTRY
+# ============================================================================
+
+- name: "Parse Notification Channels from Alerts"
+  set_fact:
+    all_notification_channels: []
+  
+- name: "Extract Notification Channels from Each Alert"
+  set_fact:
+    all_notification_channels: "{{ all_notification_channels + (automation.alerts.notification_channels | from_json if automation.alerts.notification_channels is string else automation.alerts.notification_channels) }}"
+  loop: "{{ monitoring_cfg.automations }}"
+  loop_control:
+    loop_var: automation
+    label: "{{ automation.name }}"
+  when: 
+    - automation.alerts is defined
+    - automation.alerts.notification_channels is defined
+    - automation.alerts.notification_channels | length > 0
+
+- name: "Get Unique Notification Channels"
+  set_fact:
+    unique_channels: "{{ all_notification_channels | unique }}"
+    email_recipients: []
+    teams_webhooks: []
+
+- name: "Separate Email and Teams Channels"
+  set_fact:
+    email_recipients: "{{ email_recipients + [item] }}"
+  loop: "{{ unique_channels }}"
+  when: 
+    - "'@' in item"
+    - "'teams:' not in item"
+    - "'https://outlook.office.com/webhook/' not in item"
+
+- name: "Extract Teams Webhooks"
+  set_fact:
+    teams_webhooks: "{{ teams_webhooks + [item | regex_replace('^teams:', '')] }}"
+  loop: "{{ unique_channels }}"
+  when: 
+    - "'teams:' in item or 'https://outlook.office.com/webhook/' in item"
+
+- name: "Display Notification Channels"
+  debug:
+    msg:
+      - "=========================================="
+      - "  NOTIFICATION CHANNELS"
+      - "=========================================="
+      - "Total Alerts: {{ alerts_triggered | length }}"
+      - "Email Recipients: {{ email_recipients | length }}"
+      - "Teams Webhooks: {{ teams_webhooks | length }}"
+      - "=========================================="
+
+# ============================================================================
+# SEND EMAIL ALERTS (for Issues)
+# ============================================================================
+- name: "Send Email Alerts for Issues"
+  block:
+    - name: "Generate Email Alert Content"
+      template:
+        src: ../templates/alert_email.j2
+        dest: "/tmp/automation_alert_email_{{ ansible_date_time.epoch }}.txt"
+      register: alert_email_file
+      when: 
+        - alerts_triggered | length > 0
+    
+    - name: "Send Alert Email"
+      mail:
+        host: "{{ email_smtp_host | default('smtp.ensono.com') }}"
+        port: "{{ email_smtp_port | default(587) }}"
+        subject: "🚨 ALERT: Automation Monitoring - {{ critical_issues | default(0) }} Critical, {{ warning_issues | default(0) }} Warning"
+        body: "{{ lookup('template', '../templates/alert_email.j2') }}"
+        to: "{{ email_recipients }}"
+        from: "{{ email_from | default('automation-monitoring@ensono.com') }}"
+        subtype: "plain"
+      when: 
+        - alerts_triggered | length > 0
+        - email_recipients | length > 0
+      ignore_errors: yes
+      register: email_alert_result
+    
+    - name: "Display Email Alert Status"
+      debug:
+        msg: "✓ Email alerts sent to {{ email_recipients | join(', ') }}"
+      when: 
+        - email_alert_result is defined
+        - email_alert_result is succeeded
+  when: 
+    - alerts_triggered | length > 0
+    - email_recipients | length > 0
+
+# ============================================================================
+# SEND TEAMS ALERTS (for Issues)
+# ============================================================================
+- name: "Send Teams Alerts for Issues"
+  block:
+    - name: "Generate Teams Alert Payload"
+      set_fact:
+        teams_alert_payload: "{{ lookup('template', '../templates/alert_teams.j2') }}"
+      when: 
+        - alerts_triggered | length > 0
+    
+    - name: "Send Alert to Microsoft Teams"
+      uri:
+        url: "{{ item }}"
+        method: POST
+        body_format: json
+        body: "{{ teams_alert_payload }}"
+        status_code: [200, 201, 202]
+        timeout: 10
+      loop: "{{ teams_webhooks }}"
+      loop_control:
+        label: "Teams Webhook"
+      when: 
+        - alerts_triggered | length > 0
+        - teams_webhooks | length > 0
+      ignore_errors: yes
+      register: teams_alert_result
+    
+    - name: "Display Teams Alert Status"
+      debug:
+        msg: "✓ Teams alerts sent to {{ teams_webhooks | length }} webhook(s)"
+      when: 
+        - teams_alert_result is defined
+        - teams_alert_result is not failed
+  when: 
+    - alerts_triggered | length > 0
+    - teams_webhooks | length > 0
+
+# ============================================================================
+# SEND EMAIL NOTIFICATIONS (for Status Updates)
+# ============================================================================
+- name: "Send Email Notifications for Status"
+  block:
+    - name: "Check if Success Notifications Enabled"
+      set_fact:
+        send_success_notification: false
+    
+    - name: "Enable Success Notification if Configured"
+      set_fact:
+        send_success_notification: true
+      when: 
+        - monitoring_cfg.automations | selectattr('alerts.alert_on_success', 'defined') | selectattr('alerts.alert_on_success', 'equalto', true) | list | length > 0
+    
+    - name: "Generate Email Notification Content"
+      template:
+        src: ../templates/notification_email.j2
+        dest: "/tmp/automation_notification_email_{{ ansible_date_time.epoch }}.txt"
+      register: notification_email_file
+      when: 
+        - send_success_notification or alerts_triggered | length == 0
+    
+    - name: "Send Status Notification Email"
+      mail:
+        host: "{{ email_smtp_host | default('smtp.ensono.com') }}"
+        port: "{{ email_smtp_port | default(587) }}"
+        subject: "📊 Automation Monitoring Summary - {{ ansible_date_time.date }}"
+        body: "{{ lookup('template', '../templates/notification_email.j2') }}"
+        to: "{{ email_recipients }}"
+        from: "{{ email_from | default('automation-monitoring@ensono.com') }}"
+        subtype: "plain"
+      when: 
+        - email_recipients | length > 0
+        - send_success_notification or (alerts_triggered | length == 0 and automations_checked > 0)
+      ignore_errors: yes
+      register: email_notification_result
+    
+    - name: "Display Email Notification Status"
+      debug:
+        msg: "✓ Email notifications sent to {{ email_recipients | join(', ') }}"
+      when: 
+        - email_notification_result is defined
+        - email_notification_result is succeeded
+  when: 
+    - email_recipients | length > 0
+
+# ============================================================================
+# SEND TEAMS NOTIFICATIONS (for Status Updates)
+# ============================================================================
+- name: "Send Teams Notifications for Status"
+  block:
+    - name: "Check if Should Send Teams Notification"
+      set_fact:
+        send_teams_notification: false
+    
+    - name: "Enable Teams Notification if Appropriate"
+      set_fact:
+        send_teams_notification: true
+      when: 
+        - monitoring_cfg.automations | selectattr('alerts.alert_on_success', 'defined') | selectattr('alerts.alert_on_success', 'equalto', true) | list | length > 0
+        - alerts_triggered | length == 0
+    
+    - name: "Generate Teams Notification Payload"
+      set_fact:
+        teams_notification_payload: "{{ lookup('template', '../templates/notification_teams.j2') }}"
+      when: send_teams_notification
+    
+    - name: "Send Status Notification to Microsoft Teams"
+      uri:
+        url: "{{ item }}"
+        method: POST
+        body_format: json
+        body: "{{ teams_notification_payload }}"
+        status_code: [200, 201, 202]
+        timeout: 10
+      loop: "{{ teams_webhooks }}"
+      loop_control:
+        label: "Teams Webhook"
+      when: 
+        - teams_webhooks | length > 0
+        - send_teams_notification
+      ignore_errors: yes
+      register: teams_notification_result
+    
+    - name: "Display Teams Notification Status"
+      debug:
+        msg: "✓ Teams notifications sent to {{ teams_webhooks | length }} webhook(s)"
+      when: 
+        - teams_notification_result is defined
+        - teams_notification_result is not failed
+  when: 
+    - teams_webhooks | length > 0
+
+# ============================================================================
+# NOTIFICATION SUMMARY
+# ============================================================================
+- name: "Display Notification Summary"
+  debug:
+    msg:
+      - "=========================================="
+      - "  NOTIFICATION SUMMARY"
+      - "=========================================="
+      - "Alerts Sent: {{ 'Yes' if alerts_triggered | length > 0 else 'No' }}"
+      - "  - Email Alerts: {{ 'Sent' if (email_recipients | length > 0 and alerts_triggered | length > 0) else 'Skipped' }}"
+      - "  - Teams Alerts: {{ 'Sent' if (teams_webhooks | length > 0 and alerts_triggered | length > 0) else 'Skipped' }}"
+      - "Notifications Sent: {{ 'Yes' if (send_success_notification | default(false)) else 'No' }}"
+      - "  - Email Notifications: {{ 'Sent' if (email_recipients | length > 0 and (send_success_notification | default(false))) else 'Skipped' }}"
+      - "  - Teams Notifications: {{ 'Sent' if (teams_webhooks | length > 0 and (send_teams_notification | default(false))) else 'Skipped' }}"
+      - "=========================================="

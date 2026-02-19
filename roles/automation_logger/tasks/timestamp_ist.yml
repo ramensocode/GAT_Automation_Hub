@@ -1,0 +1,31 @@
+---
+# ========================================================================
+# IST TIMESTAMP GENERATOR
+# ========================================================================
+# Generates timestamps in IST (UTC+5:30) regardless of system timezone
+# Returns: ist_timestamp in format 'YYYY-MM-DD HH:MM:SS.mmm'
+# ========================================================================
+
+- name: "Generate IST Timestamp (UTC+5:30)"
+  shell: |
+    python3 << 'PYTHON_EOF'
+    from datetime import datetime, timezone, timedelta
+    
+    # Define IST as UTC+5:30
+    IST = timezone(timedelta(hours=5, minutes=30))
+    
+    # Get current time in IST
+    now_ist = datetime.now(IST)
+    
+    # Format as 'YYYY-MM-DD HH:MM:SS.mmm' (Snowflake NTZ style)
+    formatted = now_ist.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    
+    print(formatted)
+    PYTHON_EOF
+  register: ist_timestamp_result
+  changed_when: false
+  failed_when: ist_timestamp_result.rc != 0
+
+- name: "Set IST Timestamp Fact"
+  set_fact:
+    ist_timestamp: "{{ ist_timestamp_result.stdout }}"

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Automation Health Report - {{ ansible_date_time.date }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }
+        h2 { color: #555; margin-top: 30px; border-bottom: 2px solid #ddd; padding-bottom: 8px; }
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+        .metric { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; text-align: center; }
+        .metric.success { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+        .metric.warning { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .metric.critical { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+        .metric-value { font-size: 36px; font-weight: bold; }
+        .metric-label { font-size: 14px; opacity: 0.9; margin-top: 5px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th { background: #007bff; color: white; padding: 12px; text-align: left; }
+        td { padding: 10px; border-bottom: 1px solid #ddd; }
+        tr:hover { background: #f8f9fa; }
+        .status { padding: 5px 10px; border-radius: 4px; font-weight: bold; display: inline-block; }
+        .status.HEALTHY { background: #28a745; color: white; }
+        .status.WARNING { background: #ffc107; color: #333; }
+        .status.CRITICAL { background: #dc3545; color: white; }
+        .alert-box { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 10px 0; border-radius: 4px; }
+        .alert-box.critical { background: #f8d7da; border-left-color: #dc3545; }
+        .timestamp { color: #666; font-size: 12px; }
+        .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #ddd; color: #666; font-size: 12px; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Automation Health Monitoring Report</h1>
+        <p class="timestamp">Generated: {{ ansible_date_time.iso8601 }} | Period: Last {{ lookback_hours }} hours</p>
+        
+        <!-- Summary Metrics -->
+        <div class="summary">
+            <div class="metric">
+                <div class="metric-value">{{ automations_checked }}</div>
+                <div class="metric-label">Automations Monitored</div>
+            </div>
+            <div class="metric success">
+                <div class="metric-value">{{ health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length }}</div>
+                <div class="metric-label">Healthy</div>
+            </div>
+            <div class="metric warning">
+                <div class="metric-value">{{ health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length }}</div>
+                <div class="metric-label">Warning</div>
+            </div>
+            <div class="metric critical">
+                <div class="metric-value">{{ critical_issues }}</div>
+                <div class="metric-label">Critical</div>
+            </div>
+        </div>
+        
+        <!-- Active Alerts -->
+        {% if alerts_triggered | length > 0 %}
+        <h2>⚠️ Active Alerts ({{ alerts_triggered | length }})</h2>
+        {% for alert in alerts_triggered %}
+        <div class="alert-box {{ 'critical' if alert.severity == 'CRITICAL' else '' }}">
+            <strong>{{ alert.severity }}:</strong> {{ alert.message }}<br>
+            <small>Owner: {{ alert.owner }} | Contact: {{ alert.contact | default('N/A') }}</small>
+        </div>
+        {% endfor %}
+        {% endif %}
+        
+        <!-- Automation Health Details -->
+        <h2>📊 Automation Health Details</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Automation</th>
+                    <th>Status</th>
+                    <th>Total Runs</th>
+                    <th>Success Rate</th>
+                    <th>Failure Rate</th>
+                    <th>Last Run</th>
+                    <th>Owner</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for auto in health_report | sort(attribute='health_status', reverse=true) %}
+                <tr>
+                    <td>
+                        <strong>{{ auto.display_name }}</strong><br>
+                        <small style="color: #666;">{{ auto.automation_name }}</small>
+                    </td>
+                    <td><span class="status {{ auto.health_status }}">{{ auto.health_status }}</span></td>
+                    <td>{{ auto.total_runs }}</td>
+                    <td>{{ auto.success_rate }}%</td>
+                    <td>{{ auto.failure_rate }}%</td>
+                    <td>
+                        {{ auto.hours_since_last_run }}h ago
+                        {% if auto.missing_run_alert %}<br><small style="color: red;">⚠️ Missing Run</small>{% endif %}
+                    </td>
+                    <td>{{ auto.owner }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        
+        <!-- Execution Summary -->
+        <h2>📈 Execution Summary</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Automation</th>
+                    <th>Successful</th>
+                    <th>Partial Success</th>
+                    <th>Failed</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for auto in health_report %}
+                <tr>
+                    <td>{{ auto.display_name }}</td>
+                    <td style="color: #28a745;">{{ auto.successful_runs }}</td>
+                    <td style="color: #ffc107;">{{ auto.partial_success_runs }}</td>
+                    <td style="color: #dc3545;">{{ auto.failed_runs }}</td>
+                    <td><strong>{{ auto.total_runs }}</strong></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            <p>Automation Monitoring System | Ensono GAT Team | {{ ansible_date_time.year }}</p>
+            <p>For support, contact: automation-team@ensono.com</p>
+        </div>
+    </div>
+</body>
+</html>

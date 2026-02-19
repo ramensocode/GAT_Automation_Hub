@@ -1,0 +1,80 @@
+---
+# ========================================================================
+# EMAIL NOTIFICATION HANDLER
+# ========================================================================
+# Sends email notification when automation fails
+# Requires: email_recipient and context variables
+# ========================================================================
+
+- name: "Validate email recipient"
+  set_fact:
+    validated_email: "{{ email_recipient }}"
+  when: email_recipient is defined and email_recipient | length > 0
+  ignore_errors: true
+
+- name: "Prepare email subject"
+  set_fact:
+    email_subject: "[{{ context.severity | upper }}] Automation Failure: {{ context.display_name }}"
+  ignore_errors: true
+
+- name: "Prepare email body"
+  set_fact:
+    email_body: |
+      AUTOMATION FAILURE NOTIFICATION
+      ================================
+      
+      Automation Name: {{ context.automation_name }}
+      Display Name: {{ context.display_name }}
+      Job ID: {{ context.job_id }}
+      Status: {{ context.status }}
+      
+      ERROR DETAILS:
+      Return Code: {{ context.return_code }}
+      Error Type: {{ context.error_type }}
+      Error Message: {{ context.error_message }}
+      Severity: {{ context.severity | upper }}
+      
+      TIMING:
+      Started: {{ context.started_at }} IST
+      Completed: {{ context.completed_at }} IST
+      
+      RESOLUTION:
+      {{ context.resolution_hint }}
+      
+      OWNER:
+      Name: {{ context.owner_name }}
+      Email: {{ context.owner_email }}
+      
+      ================================
+      This is an automated notification from the Automation Monitoring System.
+      Please do not reply to this email.
+  ignore_errors: true
+
+- name: "Send email notification via mail command"
+  shell: |
+    echo "{{ email_body }}" | mail -s "{{ email_subject }}" "{{ validated_email }}"
+  when:
+    - validated_email is defined
+    - validated_email | length > 0
+  register: email_result
+  ignore_errors: true
+
+- name: "Debug email send result"
+  debug:
+    msg:
+      - "Email notification sent to: {{ validated_email }}"
+      - "Subject: {{ email_subject }}"
+      - "Status: {{ 'SUCCESS' if email_result is succeeded else 'FAILED' }}"
+  when: ansible_verbosity >= 1
+  ignore_errors: true
+
+- name: "Warn if email failed"
+  debug:
+    msg:
+      - "⚠️ WARNING: Failed to send email notification"
+      - "Recipient: {{ validated_email }}"
+      - "Error: {{ email_result.msg | default('Unknown error') }}"
+  when:
+    - email_result is defined
+    - email_result is failed
+  ignore_errors: true

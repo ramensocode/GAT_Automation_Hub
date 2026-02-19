@@ -1,0 +1,42 @@
+---
+# ========================================================================
+# DEFAULT VARIABLES FOR AUTOMATION_LOGGER ROLE
+# ========================================================================
+# These defaults can be overridden in your playbook vars or when calling the role
+# ========================================================================
+
+# AI tracking defaults
+ai_assisted: false
+ai_tokens_used: 0
+ai_human_approved: false
+ai_approved_by: "N/A"
+
+# Additional context to append to error messages (optional)
+# Example: "Created: 5, Skipped: 2" or "Records processed: 100"
+additional_context: ""
+
+# Configuration Item (CI) - the system/application being managed
+ci_name: "{{ automation_name | default('Unknown_CI') }}"
+
+# Job ID detection - automatically detects AAP/Tower vs CLI execution
+# Set to empty string to enable auto-detection
+# AAP provides: AWX_JOB_ID or TOWER_JOB_ID
+# CLI fallback: CLI_<epoch_timestamp>
+job_id_override: ""
+
+# ========================================================================
+# SNOWFLAKE CONNECTION DEFAULTS
+# ========================================================================
+# Environment: prod, dev (controls Snowflake schema)
+# Override in playbook with -e snowflake_environment=prod
+snowflake_environment: "dev"
+snowflake_schema_map:
+  prod: "GAT"
+  dev: "GAT_DEV"
+# These should be overridden in your playbook
+snowflake_account: "nc51688.us-east-2.aws"
+snowflake_user: "gat"
+snowflake_database: "DEPT_ANALYTICS"
+snowflake_schema: "{{ snowflake_schema_map[snowflake_environment] }}"
+snowflake_warehouse: "GAT_WH"
+snowflake_role: "GAT_APP"

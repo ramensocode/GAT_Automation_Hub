@@ -1,0 +1,96 @@
+{
+  "@type": "MessageCard",
+  "@context": "https://schema.org/extensions",
+  "summary": "📊 Automation Monitoring Summary",
+  "themeColor": "{% if critical_issues > 0 %}D13438{% elif health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length > 0 %}FFA500{% else %}28A745{% endif %}",
+  "title": "📊 Automation Health Summary",
+  "sections": [
+    {
+      "activityTitle": "Monitoring Report - {{ ansible_date_time.date }}",
+      "activitySubtitle": "{{ ansible_date_time.iso8601 }}",
+      "activityImage": "https://adaptivecards.io/content/cats/2.png",
+      "facts": [
+        {
+          "name": "⏱️ Monitoring Period:",
+          "value": "Last {{ lookback_hours }} hours"
+        },
+        {
+          "name": "🔍 Automations Checked:",
+          "value": "{{ automations_checked }}"
+        },
+        {
+          "name": "📈 Total Executions:",
+          "value": "{{ automation_logs.rows | default([]) | length }}"
+        },
+        {
+          "name": "⚙️ Config Source:",
+          "value": "{{ config_metadata.source | upper if config_metadata is defined else 'YAML' }}"
+        }
+      ],
+      "markdown": true
+    },
+    {
+      "activityTitle": "📊 Health Status Breakdown",
+      "facts": [
+        {
+          "name": "✅ Healthy:",
+          "value": "{{ health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length }} ({{ ((health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length / automations_checked * 100) | round(1)) if automations_checked > 0 else 0 }}%)"
+        },
+        {
+          "name": "⚠️ Warning:",
+          "value": "{{ health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length }} ({{ ((health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length / automations_checked * 100) | round(1)) if automations_checked > 0 else 0 }}%)"
+        },
+        {
+          "name": "🚨 Critical:",
+          "value": "{{ critical_issues }} ({{ ((critical_issues / automations_checked * 100) | round(1)) if automations_checked > 0 else 0 }}%)"
+        },
+        {
+          "name": "❌ Total Failures:",
+          "value": "{{ total_failures }}"
+        }
+      ]
+    },
+    {% if critical_issues > 0 %}
+    {
+      "activityTitle": "🚨 Critical Automations Requiring Attention",
+      "text": "{% for auto in health_report | selectattr('health_status', 'equalto', 'CRITICAL')[:3] %}**{{ auto.display_name }}**  \n- Success Rate: {{ auto.success_rate }}%  \n- Failure Rate: {{ auto.failure_rate }}%  \n- Last Run: {{ auto.hours_since_last_run }}h ago  \n- Owner: {{ auto.owner }}{% if not loop.last %}\n\n{% endif %}{% endfor %}{% if health_report | selectattr('health_status', 'equalto', 'CRITICAL') | list | length > 3 %}\n\n_...and {{ health_report | selectattr('health_status', 'equalto', 'CRITICAL') | list | length - 3 }} more_{% endif %}"
+    },
+    {% elif health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length > 0 %}
+    {
+      "activityTitle": "⚠️ Automations with Warnings",
+      "text": "{% for auto in health_report | selectattr('health_status', 'equalto', 'WARNING')[:3] %}**{{ auto.display_name }}**  \n- Success Rate: {{ auto.success_rate }}%  \n- Failure Rate: {{ auto.failure_rate }}%  \n- Owner: {{ auto.owner }}{% if not loop.last %}\n\n{% endif %}{% endfor %}{% if health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length > 3 %}\n\n_...and {{ health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length - 3 }} more_{% endif %}"
+    },
+    {% else %}
+    {
+      "activityTitle": "✅ All Systems Operational",
+      "text": "All monitored automations are operating within normal parameters. No issues detected."
+    },
+    {% endif %}
+    {
+      "activityTitle": "📈 Top Performing Automations",
+      "text": "{% for auto in health_report | selectattr('health_status', 'equalto', 'HEALTHY') | sort(attribute='success_rate', reverse=true)[:3] %}**{{ auto.display display_name }}** - {{ auto.success_rate }}% success ({{ auto.total_runs }} runs){% if not loop.last %}\n{% endif %}{% endfor %}"
+    }
+  ],
+  "potentialAction": [
+    {
+      "@type": "OpenUri",
+      "name": "📄 View Full Report",
+      "targets": [
+        {
+          "os": "default",
+          "uri": "{{ monitoring_dashboard_url | default('https://monitoring.ensono.com') }}"
+        }
+      ]
+    }{% if critical_issues > 0 or health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length > 0 %},
+    {
+      "@type": "OpenUri",
+      "name": "🔧 Investigate Issues",
+      "targets": [
+        {
+          "os": "default",
+          "uri": "{{ monitoring_dashboard_url | default('https://monitoring.ensono.com') }}/issues"
+        }
+      ]
+    }{% endif %}
+  ]
+}

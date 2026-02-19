@@ -1,0 +1,158 @@
+---
+# ============================================================================
+# AUTOMATION MONITORING CONFIGURATION
+# ============================================================================
+# Central configuration for monitoring all automations
+# Add new automations here - monitoring playbook will automatically pick them up
+# ============================================================================
+
+monitoring_config:
+  # Global settings
+  default_lookback_hours: 24
+  alert_email: "automation-alerts@ensono.com"
+  alert_slack_channel: "#automation-alerts"
+  
+  # Alert thresholds (can be overridden per automation)
+  default_thresholds:
+    failure_rate_warning: 10      # % - Trigger warning
+    failure_rate_critical: 25     # % - Trigger critical alert
+    missing_runs_hours: 10        # Hours - Default grace period (converted to minutes if needed)
+    max_execution_minutes: 60     # Max expected execution time
+    partial_success_threshold: 3  # Number of partial successes before alert
+
+# ============================================================================
+# AUTOMATION REGISTRY
+# ============================================================================
+# Define all automations to monitor
+# ============================================================================
+
+automations:
+  - name: "db_backupreport_ticketing"
+    display_name: "db_backupreport_ticketing"
+    description: "Processes security alerts and creates ServiceNow tickets"
+    category: "security"
+    schedule: "event_driven"  # Options: event_driven, hourly, daily, weekly, manual
+    expected_frequency: "varies"  # For event_driven
+    owner: "Security Team"
+    contact: "security-ops@ensono.com"
+    critical: true
+    thresholds:
+      failure_rate_warning: 5
+      failure_rate_critical: 15
+      partial_success_threshold: 2
+    health_checks:
+      - check_last_run: true
+      - check_failure_rate: true
+      - check_return_codes: [ARC_3010, ARC_5001, ARC_5002, ARC_1001]
+      - check_ai_tokens: true
+    alerts:
+      enabled: true
+      notify_on: ["failure", "partial_success", "missing_run"]
+
+#   - name: "OracleOEM_Reports"
+#     display_name: "Oracle DB Backup Reporting"
+#     description: "Oracle database backup reporting to ServiceNow"
+#     category: "database"
+#     schedule: "daily"
+#     expected_frequency: "1_per_day"
+#     expected_run_time: "08:00"  # UTC
+#     owner: "DBA Team"
+#     contact: "dba-team@ensono.com"
+#     critical: true
+#     thresholds:
+#       failure_rate_warning: 10
+#       failure_rate_critical: 20
+#       missing_runs_hours: 36  # Allow 2 hour grace period for daily job
+#     health_checks:
+#       - check_last_run: true
+#       - check_failure_rate: true
+#       - check_execution_time: true
+#       - check_return_codes: [ARC_1001, ARC_0004]
+#     alerts:
+#       enabled: true
+#       notify_on: ["failure", "missing_run"]
+
+#   # Add more automations here as needed
+#   # - name: "your_new_automation"
+#   #   display_name: "Your New Automation"
+#   #   ...
+
+# ============================================================================
+# MONITORING RULES
+# ============================================================================
+monitoring_rules:
+  
+  # Rule 1: Consecutive Failures
+  - rule_name: "consecutive_failures"
+    description: "Alert on N consecutive failures"
+    enabled: true
+    parameters:
+      consecutive_count: 1
+    action: "send_critical_alert"
+  
+  # Rule 2: Failure Spike
+  - rule_name: "failure_spike"
+    description: "Alert when failure rate increases significantly"
+    enabled: true
+    parameters:
+      baseline_hours: 168  # 7 days
+      spike_threshold: 50  # % increase
+    action: "send_warning_alert"
+  
+  # Rule 3: Missing Scheduled Run
+  - rule_name: "missing_scheduled_run"
+    description: "Alert when scheduled automation doesn't run"
+    enabled: true
+    parameters:
+      grace_period_minutes: 10  # Minutes - Overrides default_thresholds.missing_runs_hours
+    action: "send_warning_alert"
+  
+  # Rule 4: Stuck Execution
+  - rule_name: "stuck_execution"
+    description: "Alert when execution time exceeds threshold"
+    enabled: true
+    parameters:
+      timeout_multiplier: 2  # 2x expected execution time
+    action: "send_warning_alert"
+  
+  # Rule 5: Return Code Pattern
+  - rule_name: "return_code_pattern"
+    description: "Alert on specific return code patterns"
+    enabled: true
+    parameters:
+      watch_codes: [ARC_0004, ARC_1002, ARC_2000]
+      occurrences: 2
+      timeframe_hours: 4
+    action: "send_critical_alert"
+  
+  # Rule 6: Minimum Run Frequency
+  - rule_name: "minimum_run_frequency"
+    description: "Alert when automation runs less than expected frequency"
+    enabled: true
+    parameters:
+      lookback_hours: 18      # Time window to check
+      min_runs: 3             # Minimum expected runs in that window
+    action: "send_critical_alert"
+
+# ============================================================================
+# REPORT CONFIGURATION
+# ============================================================================
+reports:
+  daily_summary:
+    enabled: true
+    schedule: "0 9 * * *"  # 9 AM daily
+    recipients: ["automation-team@ensono.com"]
+    include:
+      - automation_health_scores
+      - failure_summary
+      - top_errors
+      - execution_trends
+  
+  weekly_executive:
+    enabled: true
+    schedule: "0 9 * * 1"  # Monday 9 AM
+    recipients: ["exec-team@ensono.com"]
+    include:
+      - automation_availability
+      - key_metrics
+      - improvement_recommendations

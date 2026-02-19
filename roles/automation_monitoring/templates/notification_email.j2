@@ -1,0 +1,71 @@
+AUTOMATION MONITORING NOTIFICATION - {{ ansible_date_time.date }}
+================================================
+
+📊 Health Summary Report
+
+Time: {{ ansible_date_time.iso8601 }}
+Monitoring Period: Last {{ lookback_hours }} hours
+
+OVERALL STATUS:
+================================================
+Automations Monitored: {{ automations_checked }}
+
+Status Breakdown:
+  ✅ Healthy:  {{ health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length }} ({{ ((health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length / automations_checked * 100) | round(1)) if automations_checked > 0 else 0 }}%)
+  ⚠️  Warning:  {{ health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length }} ({{ ((health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length / automations_checked * 100) | round(1)) if automations_checked > 0 else 0 }}%)
+  🚨 Critical: {{ critical_issues }} ({{ ((critical_issues / automations_checked * 100) | round(1)) if automations_checked > 0 else 0 }}%)
+
+Total Executions Analyzed: {{ automation_logs.rows | default([]) | length }}
+Total Failures: {{ total_failures }}
+
+{% if health_report | selectattr('health_status', 'equalto', 'CRITICAL') | list | length > 0 %}
+CRITICAL AUTOMATIONS (Action Needed):
+================================================
+{% for auto in health_report | selectattr('health_status', 'equalto', 'CRITICAL') %}
+🚨 {{ auto.display_name }}
+   Category: {{ auto.category }}
+   Success Rate: {{ auto.success_rate }}% | Failure Rate: {{ auto.failure_rate }}%
+   Total Runs: {{ auto.total_runs }} ({{ auto.successful_runs }} succeeded, {{ auto.failed_runs }} failed)
+   Last Run: {{ auto.hours_since_last_run }}h ago ({{ auto.last_run_status }})
+   {% if auto.missing_run_alert %}⚠️  MISSING SCHEDULED RUN{% endif %}
+   Owner: {{ auto.owner }}
+   
+{% endfor %}
+{% endif %}
+
+{% if health_report | selectattr('health_status', 'equalto', 'WARNING') | list | length > 0 %}
+WARNING AUTOMATIONS (Review Recommended):
+================================================
+{% for auto in health_report | selectattr('health_status', 'equalto', 'WARNING') %}
+⚠️  {{ auto.display_name }}
+   Category: {{ auto.category }}
+   Success Rate: {{ auto.success_rate }}% | Failure Rate: {{ auto.failure_rate }}%
+   Total Runs: {{ auto.total_runs }} ({{ auto.successful_runs }} succeeded, {{ auto.failed_runs }} failed)
+   Last Run: {{ auto.hours_since_last_run }}h ago ({{ auto.last_run_status }})
+   Owner: {{ auto.owner }}
+   
+{% endfor %}
+{% endif %}
+
+{% if health_report | selectattr('health_status', 'equalto', 'HEALTHY') | list | length > 0 %}
+HEALTHY AUTOMATIONS:
+================================================
+{% for auto in health_report | selectattr('health_status', 'equalto', 'HEALTHY') %}
+✅ {{ auto.display_name }} - {{ auto.success_rate }}% success rate ({{ auto.total_runs }} runs)
+{% endfor %}
+{% endif %}
+
+{% if alerts_triggered | length == 0 %}
+✅ NO ALERTS - All monitored automations are operating normally.
+{% endif %}
+
+DETAILED METRICS:
+================================================
+Configuration Source: {{ config_metadata.source | upper if config_metadata is defined else 'YAML' }}
+{% if config_metadata.database_driven %}Database-Driven Configuration: Enabled{% endif %}
+
+Report Location: {{ report_file.dest | default('Not generated') }}
+
+---
+This is an automated notification from the Automation Monitoring System.
+For support or questions, contact: automation-team@ensono.com

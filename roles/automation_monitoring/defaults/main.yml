@@ -1,0 +1,48 @@
+---
+# ============================================================================
+# DEFAULT VARIABLES - Automation Monitoring Role
+# ============================================================================
+# These can be overridden in playbooks or via extra-vars
+# ============================================================================
+
+# Configuration source
+use_db_config: true  # Use database-driven config (set to false for YAML)
+
+# Monitoring parameters
+automation_name: "all"  # Monitor all or specify one automation
+lookback_hours: 24      # Time window to analyze
+missing_runs_hours: null  # Override default grace period (null = use config)
+min_runs_required: null   # Override minimum run count (null = use config)
+min_frequency_lookback_hours: null  # Override lookback window for min runs (null = use config)
+
+# Snowflake connection parameters
+snowflake_account: "nc51688.us-east-2.aws"
+snowflake_user: "gat"
+snowflake_database: "DEPT_ANALYTICS"
+snowflake_schema: "GAT_DEV"
+snowflake_warehouse: "GAT_WH"
+snowflake_role: "GAT_APP"
+
+# Timezone - All timestamps in IST
+monitoring_tz: "IST (Asia/Kolkata)"
+
+# Notification settings
+alert_email: "automation-alerts@ensono.com"
+alert_slack_channel: "#automation-alerts"
+notification_enabled: true
+
+# Report generation
+generate_html_report: true
+report_output_path: "/tmp/automation_health_report.html"
+
+# Logging
+logging_enabled: true
+log_level: "info"
+
+# Alert thresholds (fallback values)
+default_thresholds:
+  failure_rate_warning: 10      # % - Trigger warning
+  failure_rate_critical: 25     # % - Trigger critical alert
+  missing_runs_hours: 10        # Hours - Default grace period
+  max_execution_minutes: 60     # Max expected execution time
+  partial_success_threshold: 3  # Number of partial successes before alert

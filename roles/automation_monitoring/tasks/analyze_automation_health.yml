@@ -1,0 +1,180 @@
+---
+# ============================================================================
+# AUTOMATION HEALTH ANALYSIS TASK
+# ============================================================================
+# Analyzes a single automation's health based on logs and configuration
+# ============================================================================
+
+- name: "Filter logs for {{ automation.name }}"
+  set_fact:
+    automation_executions: "{{ automation_logs.rows | default([]) | selectattr('AUTOMATION_NAME', 'equalto', automation.name) | list }}"
+
+- name: "Debug Logs Filtering for {{ automation.name }}"
+  debug:
+    msg:
+      - "========== DEBUG: Log Filtering =========="
+      - "Looking for automation: '{{ automation.name }}'"
+      - "Total logs from query: {{ automation_logs.rows | default([]) | length }}"
+      - "Logs matched for this automation: {{ automation_executions | length }}"
+      - "Available automation names in logs: {{ automation_logs.rows | default([]) | map(attribute='AUTOMATION_NAME') | unique | list }}"
+      - "Sample log (first entry): {{ automation_logs.rows[0] if automation_logs.rows | default([]) | length > 0 else 'No logs returned' }}"
+
+- name: "Calculate Health Metrics for {{ automation.name }}"
+  set_fact:
+    total_runs: "{{ automation_executions | length }}"
+    successful_runs: "{{ automation_executions | selectattr('RETURN_CODE', 'equalto', 'ARC_0000') | list | length }}"
+    partial_success_runs: "{{ automation_executions | selectattr('RETURN_CODE', 'equalto', 'ARC_0001') | list | length }}"
+    failed_runs: "{{ automation_executions | rejectattr('RETURN_CODE', 'in', ['ARC_0000', 'ARC_0001']) | list | length }}"
+    last_run: "{{ automation_executions[0] if automation_executions | length > 0 else None }}"
+
+- name: "Calculate Failure and Success Rates"
+  set_fact:
+    failure_rate: "{{ ((failed_runs | int / total_runs | int * 100) | round(2)) if total_runs | int > 0 else 0 }}"
+    success_rate: "{{ ((successful_runs | int / total_runs | int * 100) | round(2)) if total_runs | int > 0 else 0 }}"
+
+- name: "Calculate Hours Since Last Run (Pure IST)"
+  shell: |
+    python3 << 'PYTHON_EOF'
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import sys
+    
+    # Get current IST time
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    
+    # Parse last completion time (IST)
+    last_completed_str = "{{ last_run.COMPLETED_AT if last_run else '' }}"
+    
+    if last_completed_str:
+        try:
+            # Handle both with/without milliseconds
+            if '.' in last_completed_str:
+                last_completed = datetime.strptime(last_completed_str.split('.')[0], '%Y-%m-%d %H:%M:%S')
+            else:
+                last_completed = datetime.strptime(last_completed_str, '%Y-%m-%d %H:%M:%S')
+            
+            # Make it timezone-aware (IST)
+            last_completed_ist = last_completed.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            
+            # Calculate hours difference
+            hours_diff = (now_ist - last_completed_ist).total_seconds() / 3600
+            print(round(hours_diff, 1))
+        except Exception as e:
+            # Output error to stderr for debugging
+            print(f"ERROR: {e}", file=sys.stderr)
+            print(f"Timestamp format: '{last_completed_str}'", file=sys.stderr)
+            print(999)
+    else:
+        print(999)
+    PYTHON_EOF
+  register: hours_since_calc
+  changed_when: false
+  failed_when: false
+  when: last_run is not none
+
+- name: "Set Hours Since Last Run"
+  set_fact:
+    hours_since_last_run: "{{ hours_since_calc.stdout | default('999') if (last_run and hours_since_calc is defined and hours_since_calc.stdout is defined) else '999' }}"
+
+- name: "Debug Last Run Timestamp (if parsing failed)"
+  debug:
+    msg:
+      - "========== TIMESTAMP PARSING DEBUG =========="
+      - "Last run exists: {{ last_run is not none }}"
+      - "Raw COMPLETED_AT value: '{{ last_run.COMPLETED_AT if last_run else 'N/A' }}'"
+      - "Type: {{ last_run.COMPLETED_AT | type_debug if last_run else 'N/A' }}"
+      - "Python stdout: {{ hours_since_calc.stdout if (hours_since_calc is defined and hours_since_calc.stdout is defined) else 'Not calculated' }}"
+      - "Python stderr: {{ hours_since_calc.stderr if (hours_since_calc is defined and hours_since_calc.stderr is defined) else 'N/A' }}"
+      - "Hours calculated: {{ hours_since_last_run }}"
+      - "Expected max: {{ automation.thresholds.missing_runs_hours | default(24) }}h"
+      - "Note: All timestamps in IST (Asia/Kolkata)"
+  when: hours_since_last_run | float >= 999
+
+- name: "Get Grace Period from Monitoring Rules"
+  set_fact:
+    grace_period_minutes: "{{ (missing_runs_hours * 60) if (missing_runs_hours is defined and missing_runs_hours is not none) else (((monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'missing_scheduled_run') | list)[0].parameters.grace_period_minutes) if (monitoring_cfg.monitoring_rules is defined and (monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'missing_scheduled_run') | list | length > 0) and (monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'missing_scheduled_run') | list)[0].enabled and (monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'missing_scheduled_run') | list)[0].parameters.grace_period_minutes is defined) else ((monitoring_cfg.monitoring_config.default_thresholds.missing_runs_hours * 60) if (monitoring_cfg.monitoring_config.default_thresholds.missing_runs_hours is defined) else 1440)) }}"
+
+
+- name: "Check for Missing Scheduled Runs"
+  set_fact:
+    grace_hours: "{{ (grace_period_minutes | float) / 60.0 }}"
+    missing_run_alert: "{{ (hours_since_last_run | float > (grace_period_minutes | float / 60.0)) and (hours_since_last_run | float < 999) }}"
+
+- name: "Get Minimum Run Frequency Parameters"
+  set_fact:
+    min_runs_expected: "{{ min_runs_required if (min_runs_required is defined and min_runs_required is not none) else ((monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'minimum_run_frequency') | list)[0].parameters.min_runs | default(3) if (monitoring_cfg.monitoring_rules is defined and (monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'minimum_run_frequency') | list | length > 0)) else 3) }}"
+    min_runs_lookback_hours: "{{ min_frequency_lookback_hours if (min_frequency_lookback_hours is defined and min_frequency_lookback_hours is not none) else ((monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'minimum_run_frequency') | list)[0].parameters.lookback_hours | default(18) if (monitoring_cfg.monitoring_rules is defined and (monitoring_cfg.monitoring_rules | selectattr('rule_name', 'equalto', 'minimum_run_frequency') | list | length > 0)) else 18) }}"
+
+- name: "Check Minimum Run Frequency Alert"
+  set_fact:
+    min_frequency_alert: "{{ total_runs | int < (min_runs_expected | int) }}"
+
+- name: "Determine Health Status"
+  set_fact:
+    health_status: "{{ 'CRITICAL' if (min_frequency_alert | bool) else ('WARNING' if (missing_run_alert | bool) else ('CRITICAL' if (failure_rate | float) >= (automation.thresholds.failure_rate_critical | default(25)) else ('WARNING' if (failure_rate | float) >= (automation.thresholds.failure_rate_warning | default(10)) else 'HEALTHY'))) }}"
+
+- name: "Identify Top Errors"
+  set_fact:
+    error_list: "{{ automation_executions | rejectattr('RETURN_CODE', 'equalto', 'ARC_0000') | list }}"
+    error_codes: "{{ automation_executions | rejectattr('RETURN_CODE', 'equalto', 'ARC_0000') | map(attribute='RETURN_CODE') | unique | list }}"
+
+- name: "Format Time Since Last Run"
+  set_fact:
+    time_since_last_run: "{{ 'Never' if (hours_since_last_run | float >= 999) else (((hours_since_last_run | float * 60) | round(0) | int | string) + ' minutes ago' if (hours_since_last_run | float < 2) else ((hours_since_last_run | float | round(1) | string) + 'h ago' if (hours_since_last_run | float < 48) else ((hours_since_last_run | float / 24) | round(1) | string) + ' days ago')) }}"
+
+
+- name: "Build Health Report Entry"
+  set_fact:
+    health_report: "{{ health_report + [health_entry] }}"
+    automations_checked: "{{ automations_checked | int + 1 }}"
+    total_failures: "{{ total_failures | int + failed_runs | int }}"
+    critical_issues: "{{ critical_issues | int + 1 if health_status == 'CRITICAL' else critical_issues | int }}"
+  vars:
+    health_entry:
+      automation_name: "{{ automation.name }}"
+      display_name: "{{ automation.display_name }}"
+      category: "{{ automation.category }}"
+      health_status: "{{ health_status }}"
+      total_runs: "{{ total_runs }}"
+      successful_runs: "{{ successful_runs }}"
+      partial_success_runs: "{{ partial_success_runs }}"
+      failed_runs: "{{ failed_runs }}"
+      success_rate: "{{ success_rate }}"
+      failure_rate: "{{ failure_rate }}"
+      last_run_time: "{{ last_run.COMPLETED_AT if last_run else 'Never' }}"
+      last_run_status: "{{ last_run.STATUS if last_run else 'N/A' }}"
+      last_return_code: "{{ last_run.RETURN_CODE if last_run else 'N/A' }}"
+      hours_since_last_run: "{{ hours_since_last_run }}"
+      time_since_last_run: "{{ time_since_last_run }}"
+      missing_run_alert: "{{ missing_run_alert }}"
+      min_frequency_alert: "{{ min_frequency_alert }}"
+      min_runs_expected: "{{ min_runs_expected }}"
+      min_runs_lookback_hours: "{{ min_runs_lookback_hours }}"
+      error_codes: "{{ error_codes }}"
+      top_errors: "{{ error_list[:5] }}"
+      critical: "{{ automation.critical }}"
+      owner: "{{ automation.owner }}"
+
+- name: "Display Health Summary for {{ automation.name }}"
+  debug:
+    msg:
+      - "========== {{ automation.display_name }} =========="
+      - "Status: {{ health_status }}"
+      - "Total Runs: {{ total_runs }}"
+      - "Success Rate: {{ success_rate }}%"
+      - "Failure Rate: {{ failure_rate }}%"
+      - "Last Run: {{ time_since_last_run }}"
+      - "{{ '⚠ WARNING: No run detected (grace period: ' + (grace_period_minutes | string) + ' min)' if missing_run_alert else '' }}"
+      - "{{ '⚠ WARNING: Low run frequency - Expected ' + (min_runs_expected | string) + ' runs in last ' + (min_runs_lookback_hours | string) + 'h, found ' + (total_runs | string) if min_frequency_alert else '' }}"
+
+- name: "Trigger Alert if Critical"
+  set_fact:
+    alerts_triggered: "{{ alerts_triggered + [alert] }}"
+  when: health_status == 'CRITICAL' or (health_status == 'WARNING' and automation.critical)
+  vars:
+    alert:
+      severity: "{{ health_status }}"
+      automation: "{{ automation.name }}"
+      message: "{{ automation.display_name }}: {{ health_status }} - Failure rate {{ failure_rate }}%"
+      owner: "{{ automation.owner }}"
+      contact: "{{ automation.contact }}"

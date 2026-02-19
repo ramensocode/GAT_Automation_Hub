@@ -1,0 +1,35 @@
+---
+# ============================================================================
+# ROLE METADATA - Automation Monitoring
+# ============================================================================
+
+galaxy_info:
+  role_name: automation_monitoring
+  author: EDA Team
+  description: Comprehensive automation monitoring solution with Snowflake integration
+  company: Ensono
+  license: MIT
+  min_ansible_version: "2.9"
+  
+  platforms:
+    - name: EL
+      versions:
+        - 8
+        - 9
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+  
+  galaxy_tags:
+    - monitoring
+    - automation
+    - eda
+    - snowflake
+    - alerting
+    - health-check
+    - observability
+
+dependencies:
+  - role: automation_logger
+    when: logging_enabled | default(true)

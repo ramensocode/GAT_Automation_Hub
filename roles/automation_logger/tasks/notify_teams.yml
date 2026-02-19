@@ -1,0 +1,125 @@
+---
+# ========================================================================
+# MICROSOFT TEAMS NOTIFICATION HANDLER
+# ========================================================================
+# Sends Teams notification when automation fails
+# Requires: teams_webhook and context variables
+# Uses Adaptive Card format for rich messaging
+# ========================================================================
+
+- name: "Validate Teams webhook URL"
+  set_fact:
+    validated_webhook: "{{ teams_webhook }}"
+  when: teams_webhook is defined and teams_webhook | length > 0
+  ignore_errors: true
+
+- name: "Set severity color"
+  set_fact:
+    severity_color: "{{ 'Attention' if context.severity | lower in ['critical', 'high'] else 'Warning' }}"
+  ignore_errors: true
+
+- name: "Prepare Teams Adaptive Card payload"
+  set_fact:
+    teams_payload:
+      type: "message"
+      attachments:
+        - contentType: "application/vnd.microsoft.card.adaptive"
+          contentUrl: null
+          content:
+            $schema: "http://adaptivecards.io/schemas/adaptive-card.json"
+            type: "AdaptiveCard"
+            version: "1.4"
+            body:
+              - type: "Container"
+                style: "{{ severity_color }}"
+                items:
+                  - type: "TextBlock"
+                    text: "⚠️ Automation Failure Alert"
+                    weight: "Bolder"
+                    size: "Large"
+                    wrap: true
+              - type: "FactSet"
+                facts:
+                  - title: "Automation"
+                    value: "{{ context.display_name }}"
+                  - title: "Job ID"
+                    value: "{{ context.job_id }}"
+                  - title: "Status"
+                    value: "{{ context.status }}"
+                  - title: "Return Code"
+                    value: "{{ context.return_code }}"
+                  - title: "Error Type"
+                    value: "{{ context.error_type }}"
+                  - title: "Severity"
+                    value: "{{ context.severity | upper }}"
+                  - title: "Started"
+                    value: "{{ context.started_at }} IST"
+                  - title: "Completed"
+                    value: "{{ context.completed_at }} IST"
+              - type: "Container"
+                style: "emphasis"
+                items:
+                  - type: "TextBlock"
+                    text: "**Error Message:**"
+                    weight: "Bolder"
+                    wrap: true
+                  - type: "TextBlock"
+                    text: "{{ context.error_message }}"
+                    wrap: true
+                    color: "Attention"
+              - type: "Container"
+                items:
+                  - type: "TextBlock"
+                    text: "**Resolution Hint:**"
+                    weight: "Bolder"
+                    wrap: true
+                  - type: "TextBlock"
+                    text: "{{ context.resolution_hint }}"
+                    wrap: true
+              - type: "Container"
+                separator: true
+                items:
+                  - type: "TextBlock"
+                    text: "**Owner:** {{ context.owner_name }} ({{ context.owner_email }})"
+                    size: "Small"
+                    wrap: true
+  ignore_errors: true
+
+- name: "Send notification to Teams webhook"
+  uri:
+    url: "{{ validated_webhook }}"
+    method: POST
+    body_format: json
+    body: "{{ teams_payload }}"
+    headers:
+      Content-Type: "application/json"
+    status_code: [200, 201, 202]
+    timeout: 30
+  register: teams_result
+  when:
+    - validated_webhook is defined
+    - validated_webhook | length > 0
+  ignore_errors: true
+
+- name: "Debug Teams send result"
+  debug:
+    msg:
+      - "Teams notification sent successfully"
+      - "Webhook: {{ validated_webhook }}"
+      - "Status Code: {{ teams_result.status | default('N/A') }}"
+  when:
+    - ansible_verbosity >= 1
+    - teams_result is succeeded
+  ignore_errors: true
+
+- name: "Warn if Teams notification failed"
+  debug:
+    msg:
+      - "⚠️ WARNING: Failed to send Teams notification"
+      - "Webhook: {{ validated_webhook }}"
+      - "Error: {{ teams_result.msg | default('Unknown error') }}"
+      - "Status: {{ teams_result.status | default('N/A') }}"
+  when:
+    - teams_result is defined
+    - teams_result is failed
+  ignore_errors: true
