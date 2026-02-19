@@ -1,0 +1,66 @@
+---
+# ============================================================================
+# ANSIBLE REQUIREMENTS FILE
+# ============================================================================
+# Repository: https://github.com/ramensocode/GAT_Automation_Hub.git
+# ============================================================================
+
+# Collections requirements
+collections:
+  # External collections from Ansible Galaxy
+  #- servicenow.itsm
+  
+  # Custom collections from GAT_Automation_Hub
+  # For Git sources: version/branch is specified in the URL after comma
+  # NOTE: If repo uses 'community-snowflake' directory, the galaxy.yml inside
+  #       should define: namespace: community, name: snowflake
+  - name: community.snowflake
+    source:  https://github.com/ramensocode/GAT_Automation_Hub.git#/collections/community.snowflake.tar.gz
+    type: git
+    version: main
+
+# ============================================================================
+# Roles requirements
+# ============================================================================
+roles:
+  # ----------------------------------------------------------------------------
+  # Automation Logger Role
+  # ----------------------------------------------------------------------------
+  - name: automation_logger
+    src: https://github.com/ramensocode/GAT_Automation_Hub.git
+    scm: git
+    version: main  # Use 'main' for latest, or specific tag like 'v1.0.0'
+    path: roles/automation_logger
+  
+  # ----------------------------------------------------------------------------
+  # Automation Monitoring Role
+  # ----------------------------------------------------------------------------
+  - name: automation_monitoring
+    src: https://github.com/ramensocode/GAT_Automation_Hub.git
+    scm: git
+    version: main
+    path: roles/automation_monitoring
+  
+  ##REFERENCE TEMPLATE FOR ADDING MORE ROLES##
+  # ----------------------------------------------------------------------------
+  # For SSH authentication (recommended for private repos):
+  # Replace HTTPS URL with SSH format:
+  # src: git@github.com:ramensocode/GAT_Automation_Hub.git
+  # ----------------------------------------------------------------------------
+  
+  # ----------------------------------------------------------------------------
+  # For local development (uncomment to use local copies):
+  # ----------------------------------------------------------------------------
+  # - src: ./roles/automation_logger
+  #   name: automation_logger
+  # - src: ./roles/automation_monitoring
+  #   name: automation_monitoring
+  
+  # ----------------------------------------------------------------------------
+  # Add additional roles below:
+  # ----------------------------------------------------------------------------
+  # - name: your_custom_role
+  #   src: https://github.com/ramensocode/GAT_Automation_Hub.git
+  #   scm: git
+  #   version: main
+  #   path: roles/your_custom_role
